@@ -15,7 +15,7 @@
 ### 服务端（一键安装）
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/你的用户名/cf-ssh-tunnel/main/install.sh | sudo bash -s -- \
+curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/install.sh | sudo bash -s -- \
   --cf-token "你的Cloudflare API Token" \
   --domain "example.com" \
   --notify-email "you@example.com"
@@ -73,7 +73,7 @@ curl -sSL https://raw.githubusercontent.com/你的用户名/cf-ssh-tunnel/main/i
 ## 卸载
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/你的用户名/cf-ssh-tunnel/main/uninstall.sh | sudo bash -s -- \
+curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/uninstall.sh | sudo bash -s -- \
   --cf-token "你的Cloudflare API Token"
 ```
 

@@ -41,13 +41,31 @@ cat << 'EOF'
 EOF
 echo -e "${NC}"
 
+# ---- 依赖检查 ----
+command -v python3 &>/dev/null || { log_error "需要 python3，请先安装"; exit 1; }
+command -v curl &>/dev/null || { log_error "需要 curl，请先安装"; exit 1; }
+command -v openssl &>/dev/null || { log_error "需要 openssl，请先安装"; exit 1; }
+
+# ---- 防止重复安装 ----
+if [[ -f /etc/cfssh/config ]]; then
+    log_error "检测到已安装。如需重装请先运行 cfssh -> 0 卸载"
+    exit 1
+fi
+
 # ---- 交互式输入 ----
 echo ""
-read -p "请输入 Cloudflare API Token: " CF_TOKEN
+read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
+echo ""
 [[ -z "$CF_TOKEN" ]] && { log_error "Token 不能为空"; exit 1; }
 
 read -p "请输入域名 (如 yanhuang.cc.cd): " BASE_DOMAIN
 [[ -z "$BASE_DOMAIN" ]] && { log_error "域名不能为空"; exit 1; }
+
+# 严格校验域名格式（防命令注入）
+if ! [[ "$BASE_DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]; then
+    log_error "域名格式非法"
+    exit 1
+fi
 
 # ---- 随机生成 ----
 gen_username() { echo "u$(tr -dc 'a-z0-9' < /dev/urandom | head -c 8)"; }
@@ -57,8 +75,8 @@ gen_subdomain() { tr -dc '0-9' < /dev/urandom | head -c 10; echo; }
 USERNAME=$(gen_username)
 PASSWORD=$(gen_password)
 SUBDOMAIN=$(gen_subdomain)
-HOSTNAME="$SUBDOMAIN.$BASE_DOMAIN"
 TUNNEL_NAME="ssh-$SUBDOMAIN"
+# HOSTNAME 在 zone 查找到后生成
 
 ARCH=$(uname -m)
 case $ARCH in
@@ -95,33 +113,31 @@ print(d['result'][0]['id'] if d.get('success') and d.get('result') else 'ERROR')
 [[ "$ACCOUNT_ID" == "ERROR" || -z "$ACCOUNT_ID" ]] && { log_error "Token 无效或无账户权限"; exit 1; }
 log_info "账户验证通过"
 
-# 获取 zone_id
-ROOT_DOMAIN=$(echo "$BASE_DOMAIN" | rev | cut -d. -f1,2,3 | rev)
-# 尝试 2 级和 3 级域名匹配
+# 获取 zone_id（从完整域名逐级向上查找）
 ZONE_ID=""
-for try_domain in "$BASE_DOMAIN" "$ROOT_DOMAIN"; do
-    ZONE_ID=$(cf_api GET "/zones?name=$try_domain" | python3 -c "
+check_domain="$BASE_DOMAIN"
+while [[ -n "$check_domain" ]]; do
+    ZONE_ID=$(cf_api GET "/zones?name=$check_domain" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
 " 2>/dev/null)
-    [[ -n "$ZONE_ID" ]] && { BASE_DOMAIN="$try_domain"; break; }
+    if [[ -n "$ZONE_ID" ]]; then
+        ZONE_NAME="$check_domain"
+        break
+    fi
+    # 去掉最左一段，继续向上找
+    if [[ "$check_domain" == *.*.* ]]; then
+        check_domain="${check_domain#*.}"
+    else
+        break
+    fi
 done
-# 如果 BASE_DOMAIN 本身就是 zone（如 yanhuang.cc.cd），上面已处理
-if [[ -z "$ZONE_ID" ]]; then
-    ZONE_ID=$(cf_api GET "/zones?name=$BASE_DOMAIN" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
-" 2>/dev/null)
-fi
 [[ -z "$ZONE_ID" ]] && { log_error "找不到域名 $BASE_DOMAIN 的 Zone，请确认域名已托管在该 CF 账号"; exit 1; }
 
-# 如果用户输入的是子域名，重新生成完整 hostname
-if [[ "$HOSTNAME" != *"$BASE_DOMAIN" ]]; then
-    HOSTNAME="$SUBDOMAIN.$BASE_DOMAIN"
-fi
-log_info "域名 Zone: $BASE_DOMAIN"
+# 完整 hostname：随机前缀 + zone 域名
+HOSTNAME="$SUBDOMAIN.$ZONE_NAME"
+log_info "域名 Zone: $ZONE_NAME"
 
 # ---- 安装 cloudflared ----
 echo ""
@@ -168,13 +184,14 @@ cf_api PUT "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
 log_info "隧道路由已配置"
 
 # 创建 DNS
-DNS_RESULT=$(cf_api POST "/zones/$ZONE_ID/dns_records" \
-    "{\"type\":\"CNAME\",\"name\":\"$HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"ttl\":1,\"proxied\":true}" | python3 -c "
+DNS_RESP=$(cf_api POST "/zones/$ZONE_ID/dns_records" \
+    "{\"type\":\"CNAME\",\"name\":\"$HOSTNAME\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"ttl\":1,\"proxied\":true}")
+DNS_RECORD_ID=$(echo "$DNS_RESP" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-print('OK' if d.get('success') else 'ERROR:'+str(d.get('errors')))
+print(d['result']['id'] if d.get('success') else '')
 " 2>/dev/null)
-[[ "$DNS_RESULT" != "OK" ]] && log_warn "DNS 创建可能失败: $DNS_RESULT" || log_info "DNS 记录已创建"
+[[ -z "$DNS_RECORD_ID" ]] && log_warn "DNS 创建可能失败" || log_info "DNS 记录已创建"
 
 # 获取隧道 Token
 TUNNEL_TOKEN=$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" | python3 -c "
@@ -215,6 +232,8 @@ USERNAME="$USERNAME"
 HOSTNAME="$HOSTNAME"
 TUNNEL_ID="$TUNNEL_ID"
 TUNNEL_NAME="$TUNNEL_NAME"
+ZONE_ID="$ZONE_ID"
+DNS_RECORD_ID="$DNS_RECORD_ID"
 EOF
 chmod 600 /etc/cfssh/config
 
@@ -274,8 +293,9 @@ while true; do
             read -p "确认卸载？(y/N): " c
             [[ "$c" == "y" || "$c" == "Y" ]] && {
                 echo "请输入 Cloudflare API Token 以删除隧道:"
-                read -p "Token: " DEL_TOKEN
-                bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/uninstall.sh) --cf-token "$DEL_TOKEN"
+                read -s -p "Token: " DEL_TOKEN
+                echo ""
+                curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/uninstall.sh | bash -s -- --cf-token "$DEL_TOKEN"
                 exit 0
             }
             ;;

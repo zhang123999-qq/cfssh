@@ -17,6 +17,9 @@ NC='\033[0m'
 
 [[ $EUID -ne 0 ]] && { echo -e "${RED}请用 root 运行${NC}"; exit 1; }
 
+command -v python3 &>/dev/null || { echo -e "${RED}需要 python3${NC}"; exit 1; }
+command -v curl &>/dev/null || { echo -e "${RED}需要 curl${NC}"; exit 1; }
+
 CF_TOKEN=""
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -26,7 +29,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$CF_TOKEN" ]]; then
-    read -p "请输入 Cloudflare API Token: " CF_TOKEN
+    read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
+    echo ""
     [[ -z "$CF_TOKEN" ]] && { echo -e "${RED}Token 不能为空${NC}"; exit 1; }
 fi
 
@@ -65,8 +69,8 @@ userdel -r "$USERNAME" 2>/dev/null
 rm -f /etc/ssh/sshd_config.d/99-cf-tunnel.conf
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
 
-# 删除 CF 隧道
-echo -e "${GREEN}[4/5]${NC} 删除 Cloudflare 隧道..."
+# 删除 CF 隧道和 DNS
+echo -e "${GREEN}[4/5]${NC} 删除 Cloudflare 隧道和 DNS..."
 ACCOUNT_ID=$(curl -s "$CF_API/accounts" -H "Authorization: Bearer $CF_TOKEN" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -76,6 +80,12 @@ if [[ -n "$ACCOUNT_ID" ]]; then
     curl -s -X DELETE "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID?cascade=true" \
         -H "Authorization: Bearer $CF_TOKEN" > /dev/null
     echo "  隧道已删除"
+    # 删除 DNS 记录
+    if [[ -n "$ZONE_ID" && -n "$DNS_RECORD_ID" ]]; then
+        curl -s -X DELETE "$CF_API/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+            -H "Authorization: Bearer $CF_TOKEN" > /dev/null
+        echo "  DNS 记录已删除"
+    fi
 else
     echo -e "  ${YELLOW}Token 无效，跳过隧道删除（请手动在 CF 后台删）${NC}"
 fi
@@ -85,5 +95,4 @@ echo -e "${GREEN}[5/5]${NC} 清理配置文件..."
 rm -rf /etc/cfssh
 
 echo ""
-echo -e "${YELLOW}请手动删除 DNS 记录: $HOSTNAME${NC}"
 echo -e "${GREEN}卸载完成${NC}"

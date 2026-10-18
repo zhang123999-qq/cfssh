@@ -341,6 +341,8 @@ TUNNEL_NAME="$TUNNEL_NAME"
 ZONE_ID="$ZONE_ID"
 DNS_RECORD_ID="$DNS_RECORD_ID"
 SSHD_MODE="$SSHD_MODE"
+EXTRA_HOSTNAMES=""
+EXTRA_DNS_IDS=""
 EOF
 chmod 600 /etc/cfssh/config
 
@@ -366,6 +368,7 @@ show_menu() {
     echo "  │  5. 查看隧道状态"
     echo "  │  6. 查看隧道日志"
     echo "  │  7. 更新隧道 Token"
+    echo "  │  8. 更新/增加域名"
     echo "  │"
     echo -e "  ${SKYBLUE}└─────────────────────────────${NC}"
     echo "  0. 卸载"
@@ -376,6 +379,7 @@ show_info() {
     echo ""
     echo -e "${GREEN}连接信息：${NC}"
     echo "  域名:     $HOSTNAME"
+    [[ -n "$EXTRA_HOSTNAMES" ]] && echo "  附加域名: $EXTRA_HOSTNAMES"
     echo "  用户名:   $USERNAME"
     echo "  密码:     (安装时已打印，服务器不保存，24小时后失效)"
     echo ""
@@ -475,9 +479,136 @@ EOF
     echo ""
 }
 
+manage_domain() {
+    [[ $EUID -ne 0 ]] && { echo "请用 root 运行"; return; }
+    echo ""
+    echo "当前域名: $HOSTNAME"
+    [[ -n "$EXTRA_HOSTNAMES" ]] && echo "附加域名: $EXTRA_HOSTNAMES"
+    echo ""
+    echo "  a. 更换域名（随机新前缀，旧域名作废）"
+    echo "  b. 增加域名（保留旧域名，新增一个）"
+    echo "  c. 返回"
+    read -p "请选择 [a-c]: " dc
+    case $dc in
+        a|c) ;;
+        b) ;;
+        *) echo "无效选择"; return ;;
+    esac
+    [[ "$dc" == "c" ]] && return
+
+    read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
+    echo ""
+    [[ -z "$CF_TOKEN" ]] && { echo -e "${RED}Token 不能为空${NC}"; return; }
+
+    # 生成新随机前缀
+    NEW_SUB=$(tr -dc '0-9' < /dev/urandom | head -c 10)
+    # 从当前 HOSTNAME 提取 zone（去掉第一段）
+    ZONE_PART="${HOSTNAME#*.}"
+    NEW_HOST="$NEW_SUB.$ZONE_PART"
+
+    CF_API="https://api.cloudflare.com/client/v4"
+    ACCOUNT_ID=$(curl -s --connect-timeout 10 --max-time 30 "$CF_API/accounts" \
+        -H "Authorization: Bearer $CF_TOKEN" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
+" 2>/dev/null || echo "")
+    [[ -z "$ACCOUNT_ID" ]] && { echo -e "${RED}Token 无效${NC}"; return; }
+
+    if [[ "$dc" == "a" ]]; then
+        # --- 更换域名 ---
+        echo "正在更换域名: $HOSTNAME -> $NEW_HOST ..."
+
+        # 1. 更新隧道 ingress（只保留新域名）
+        INGRESS_JSON="{\"config\":{\"ingress\":[{\"hostname\":\"$NEW_HOST\",\"service\":\"ssh://localhost:22\"},"
+        # 保留附加域名
+        for h in $EXTRA_HOSTNAMES; do
+            INGRESS_JSON="${INGRESS_JSON}{\"hostname\":\"$h\",\"service\":\"ssh://localhost:22\"},"
+        done
+        INGRESS_JSON="${INGRESS_JSON}{\"service\":\"http_status:404\"}]}}"
+        curl -s --connect-timeout 10 --max-time 30 -X PUT \
+            "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            --data "$INGRESS_JSON" > /dev/null
+
+        # 2. 删旧 DNS，建新 DNS
+        if [[ -n "$ZONE_ID" && -n "$DNS_RECORD_ID" ]]; then
+            curl -s -X DELETE "$CF_API/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
+                -H "Authorization: Bearer $CF_TOKEN" > /dev/null
+        fi
+        NEW_DNS=$(curl -s --connect-timeout 10 --max-time 30 -X POST \
+            "$CF_API/zones/$ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"type\":\"CNAME\",\"name\":\"$NEW_HOST\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"ttl\":1,\"proxied\":true}" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['id'] if d.get('success') else '')" 2>/dev/null || echo "")
+
+        if [[ -n "$NEW_DNS" ]]; then
+            # 3. 更新本地配置
+            sed -i "s|^HOSTNAME=.*|HOSTNAME=\"$NEW_HOST\"|" "$CONFIG"
+            sed -i "s|^DNS_RECORD_ID=.*|DNS_RECORD_ID=\"$NEW_DNS\"|" "$CONFIG"
+            HOSTNAME="$NEW_HOST"
+            DNS_RECORD_ID="$NEW_DNS"
+            echo -e "${GREEN}域名已更换: $NEW_HOST${NC}"
+            echo -e "${YELLOW}旧域名已作废，DNS 记录已删除${NC}"
+        else
+            echo -e "${RED}新 DNS 创建失败，旧域名保持不变${NC}"
+        fi
+
+    elif [[ "$dc" == "b" ]]; then
+        # --- 增加域名 ---
+        echo "正在增加域名: $NEW_HOST ..."
+
+        # 1. 更新隧道 ingress（保留所有旧域名 + 新域名）
+        INGRESS_JSON="{\"config\":{\"ingress\":[{\"hostname\":\"$HOSTNAME\",\"service\":\"ssh://localhost:22\"},"
+        for h in $EXTRA_HOSTNAMES; do
+            INGRESS_JSON="${INGRESS_JSON}{\"hostname\":\"$h\",\"service\":\"ssh://localhost:22\"},"
+        done
+        INGRESS_JSON="${INGRESS_JSON}{\"hostname\":\"$NEW_HOST\",\"service\":\"ssh://localhost:22\"},"
+        INGRESS_JSON="${INGRESS_JSON}{\"service\":\"http_status:404\"}]}}"
+        curl -s --connect-timeout 10 --max-time 30 -X PUT \
+            "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            --data "$INGRESS_JSON" > /dev/null
+
+        # 2. 建新 DNS
+        NEW_DNS=$(curl -s --connect-timeout 10 --max-time 30 -X POST \
+            "$CF_API/zones/$ZONE_ID/dns_records" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"type\":\"CNAME\",\"name\":\"$NEW_HOST\",\"content\":\"$TUNNEL_ID.cfargotunnel.com\",\"ttl\":1,\"proxied\":true}" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['id'] if d.get('success') else '')" 2>/dev/null || echo "")
+
+        if [[ -n "$NEW_DNS" ]]; then
+            # 3. 更新本地配置（追加到附加域名列表）
+            if [[ -z "$EXTRA_HOSTNAMES" ]]; then
+                NEW_EXTRA="$NEW_HOST"
+            else
+                NEW_EXTRA="$EXTRA_HOSTNAMES $NEW_HOST"
+            fi
+            # 保存附加域名的 DNS ID（用分号分隔）
+            if [[ -z "$EXTRA_DNS_IDS" ]]; then
+                NEW_IDS="$NEW_DNS"
+            else
+                NEW_IDS="$EXTRA_DNS_IDS;$NEW_DNS"
+            fi
+            sed -i "s|^EXTRA_HOSTNAMES=.*|EXTRA_HOSTNAMES=\"$NEW_EXTRA\"|" "$CONFIG"
+            # 如果原来没有这行则追加
+            grep -q "^EXTRA_HOSTNAMES=" "$CONFIG" || echo "EXTRA_HOSTNAMES=\"$NEW_EXTRA\"" >> "$CONFIG"
+            grep -q "^EXTRA_DNS_IDS=" "$CONFIG" || echo "EXTRA_DNS_IDS=\"$NEW_IDS\"" >> "$CONFIG"
+            sed -i "s|^EXTRA_DNS_IDS=.*|EXTRA_DNS_IDS=\"$NEW_IDS\"|" "$CONFIG"
+            EXTRA_HOSTNAMES="$NEW_EXTRA"
+            EXTRA_DNS_IDS="$NEW_IDS"
+            echo -e "${GREEN}域名已增加: $NEW_HOST${NC}"
+            echo -e "现在可用域名: $HOSTNAME $EXTRA_HOSTNAMES"
+        else
+            echo -e "${RED}DNS 创建失败${NC}"
+        fi
+    fi
+    echo ""
+}
+
 while true; do
     show_menu
-    read -p "请选择 [0-7]: " choice
+    read -p "请选择 [0-8]: " choice
     case $choice in
         1) show_info ;;
         2) rotate_pass ;;
@@ -486,6 +617,7 @@ while true; do
         5) systemctl status cfssh --no-pager -l | head -20 ;;
         6) journalctl -u cfssh -n 50 --no-pager ;;
         7) update_tunnel_token ;;
+        8) manage_domain ;;
         0)
             read -p "确认卸载？(y/N): " c
             [[ "$c" == "y" || "$c" == "Y" ]] && {

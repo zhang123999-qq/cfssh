@@ -105,11 +105,19 @@ if [[ -n "$ACCOUNT_ID" ]]; then
     curl -s -X DELETE "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID?cascade=true" \
         -H "Authorization: Bearer $CF_TOKEN" > /dev/null
     echo "  隧道已删除"
-    # 删除 DNS 记录
+    # 删除 DNS 记录（主 + 附加）
     if [[ -n "$ZONE_ID" && -n "$DNS_RECORD_ID" ]]; then
         curl -s -X DELETE "$CF_API/zones/$ZONE_ID/dns_records/$DNS_RECORD_ID" \
             -H "Authorization: Bearer $CF_TOKEN" > /dev/null
-        echo "  DNS 记录已删除"
+        echo "  主 DNS 记录已删除"
+    fi
+    if [[ -n "$ZONE_ID" && -n "$EXTRA_DNS_IDS" ]]; then
+        IFS=';' read -ra IDS <<< "$EXTRA_DNS_IDS"
+        for did in "${IDS[@]}"; do
+            [[ -n "$did" ]] && curl -s -X DELETE "$CF_API/zones/$ZONE_ID/dns_records/$did" \
+                -H "Authorization: Bearer $CF_TOKEN" > /dev/null
+        done
+        echo "  附加 DNS 记录已删除"
     fi
 else
     echo -e "  ${YELLOW}Token 无效，跳过隧道删除（请手动在 CF 后台删）${NC}"

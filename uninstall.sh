@@ -1,11 +1,11 @@
 #!/bin/bash
 #
-# cf-ssh-tunnel 卸载
+# cfssh 卸载
 #
 # 可单独运行:
-#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/uninstall.sh) --cf-token "你的Token"
+#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/uninstall.sh) --cf-token "你的Token"
 #
-# 或通过管理面板: cf-ssh-tunnel -> 0
+# 或通过管理面板: cfssh -> 0
 #
 
 set -e
@@ -30,7 +30,7 @@ if [[ -z "$CF_TOKEN" ]]; then
     [[ -z "$CF_TOKEN" ]] && { echo -e "${RED}Token 不能为空${NC}"; exit 1; }
 fi
 
-CONFIG="/etc/cf-ssh-tunnel/config"
+CONFIG="/etc/cfssh/config"
 if [[ ! -f "$CONFIG" ]]; then
     echo -e "${YELLOW}未找到安装记录，可能未安装${NC}"
     exit 1
@@ -50,14 +50,14 @@ CF_API="https://api.cloudflare.com/client/v4"
 
 # 停止服务
 echo -e "${GREEN}[1/5]${NC} 停止隧道服务..."
-systemctl stop cf-ssh-tunnel 2>/dev/null
-systemctl disable cf-ssh-tunnel 2>/dev/null
-rm -f /etc/systemd/system/cf-ssh-tunnel.service
+systemctl stop cfssh 2>/dev/null
+systemctl disable cfssh 2>/dev/null
+rm -f /etc/systemd/system/cfssh.service
 systemctl daemon-reload
 
 # 删除管理命令
 echo -e "${GREEN}[2/5]${NC} 删除管理命令..."
-rm -f /usr/local/bin/cf-ssh-tunnel
+rm -f /usr/local/bin/cfssh
 
 # 删除用户
 echo -e "${GREEN}[3/5]${NC} 删除用户 $USERNAME..."
@@ -82,7 +82,7 @@ fi
 
 # 清理配置
 echo -e "${GREEN}[5/5]${NC} 清理配置文件..."
-rm -rf /etc/cf-ssh-tunnel
+rm -rf /etc/cfssh
 
 echo ""
 echo -e "${YELLOW}请手动删除 DNS 记录: $HOSTNAME${NC}"

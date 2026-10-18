@@ -1,4 +1,4 @@
-# cf-ssh-tunnel
+# cfssh
 
 通过 Cloudflare Tunnel（Argo）为内网/无公网 IP 的服务器提供 SSH 访问，一键安装。
 
@@ -7,12 +7,12 @@
 - **内网穿透**：服务器无需公网 IP，只需能访问互联网
 - **全随机凭证**：用户名、密码、域名前缀全部随机生成
 - **密码不落盘**：密码只在控制台打印一次，服务器上不保存
-- **3X-UI 式管理**：一条命令安装，`cf-ssh-tunnel` 进管理面板
+- **3X-UI 式管理**：一条命令安装，`cfssh` 进管理面板
 
 ## 安装
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh)
 ```
 
 按提示输入：
@@ -32,11 +32,11 @@ bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/m
 ## 管理面板
 
 ```bash
-cf-ssh-tunnel
+cfssh
 ```
 
 ```
-  cf-ssh-tunnel 管理面板
+  cfssh 管理面板
 
   1. 查看连接信息
   2. 更换密码
@@ -75,11 +75,11 @@ cf-ssh-tunnel
 
 ```bash
 # 方式一：管理面板
-cf-ssh-tunnel
+cfssh
 # 选 0
 
 # 方式二：直接运行
-bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/uninstall.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/uninstall.sh)
 ```
 
 ## 安全说明

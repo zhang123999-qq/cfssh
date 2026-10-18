@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# cf-ssh-tunnel 一键安装（3X-UI 风格）
+# cfssh 一键安装（3X-UI 风格）
 #
 # 安装:
-#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/install.sh)
+#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh)
 #
 # 安装后管理:
-#   cf-ssh-tunnel
+#   cfssh
 #
 # 重要：用户名、密码、域名只打印到控制台一次，密码永不落盘。
 #
@@ -142,7 +142,7 @@ echo "$USERNAME:$PASSWORD" | chpasswd
 
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/99-cf-tunnel.conf << EOF
-# cf-ssh-tunnel 生成
+# cfssh 生成
 Match User $USERNAME
     PasswordAuthentication yes
     PubkeyAuthentication no
@@ -186,7 +186,7 @@ print(d['result'] if d.get('success') else 'ERROR')
 
 # ---- systemd 服务 ----
 log_info "启动隧道服务..."
-cat > /etc/systemd/system/cf-ssh-tunnel.service << EOF
+cat > /etc/systemd/system/cfssh.service << EOF
 [Unit]
 Description=Cloudflare Tunnel for SSH
 After=network.target
@@ -201,34 +201,34 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-chmod 600 /etc/systemd/system/cf-ssh-tunnel.service
+chmod 600 /etc/systemd/system/cfssh.service
 systemctl daemon-reload
-systemctl enable cf-ssh-tunnel 2>/dev/null
-systemctl restart cf-ssh-tunnel
+systemctl enable cfssh 2>/dev/null
+systemctl restart cfssh
 sleep 3
-systemctl is-active cf-ssh-tunnel &>/dev/null && log_info "隧道运行中" || log_warn "隧道启动异常，请检查"
+systemctl is-active cfssh &>/dev/null && log_info "隧道运行中" || log_warn "隧道启动异常，请检查"
 
 # ---- 保存配置（不含密码） ----
-mkdir -p /etc/cf-ssh-tunnel
-cat > /etc/cf-ssh-tunnel/config << EOF
+mkdir -p /etc/cfssh
+cat > /etc/cfssh/config << EOF
 USERNAME="$USERNAME"
 HOSTNAME="$HOSTNAME"
 TUNNEL_ID="$TUNNEL_ID"
 TUNNEL_NAME="$TUNNEL_NAME"
 EOF
-chmod 600 /etc/cf-ssh-tunnel/config
+chmod 600 /etc/cfssh/config
 
 # ---- 安装管理命令 ----
-cat > /usr/local/bin/cf-ssh-tunnel << 'MANAGER_EOF'
+cat > /usr/local/bin/cfssh << 'MANAGER_EOF'
 #!/bin/bash
-# cf-ssh-tunnel 管理菜单
+# cfssh 管理菜单
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; SKYBLUE='\033[0;36m'; NC='\033[0m'
-CONFIG="/etc/cf-ssh-tunnel/config"
+CONFIG="/etc/cfssh/config"
 [[ -f "$CONFIG" ]] && source "$CONFIG"
 
 show_menu() {
     echo -e "${SKYBLUE}"
-    echo "  cf-ssh-tunnel 管理面板"
+    echo "  cfssh 管理面板"
     echo -e "${NC}"
     echo "  1. 查看连接信息"
     echo "  2. 更换密码"
@@ -267,15 +267,15 @@ while true; do
     case $choice in
         1) show_info ;;
         2) rotate_pass ;;
-        3) systemctl restart cf-ssh-tunnel && echo "已重启" ;;
-        4) systemctl status cf-ssh-tunnel --no-pager -l | head -20 ;;
-        5) journalctl -u cf-ssh-tunnel -n 50 --no-pager ;;
+        3) systemctl restart cfssh && echo "已重启" ;;
+        4) systemctl status cfssh --no-pager -l | head -20 ;;
+        5) journalctl -u cfssh -n 50 --no-pager ;;
         0)
             read -p "确认卸载？(y/N): " c
             [[ "$c" == "y" || "$c" == "Y" ]] && {
                 echo "请输入 Cloudflare API Token 以删除隧道:"
                 read -p "Token: " DEL_TOKEN
-                bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/uninstall.sh) --cf-token "$DEL_TOKEN"
+                bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/uninstall.sh) --cf-token "$DEL_TOKEN"
                 exit 0
             }
             ;;
@@ -286,7 +286,7 @@ while true; do
     clear
 done
 MANAGER_EOF
-chmod +x /usr/local/bin/cf-ssh-tunnel
+chmod +x /usr/local/bin/cfssh
 
 # ---- 完成，打印凭证 ----
 echo ""
@@ -301,7 +301,7 @@ echo ""
 echo "  连接命令:"
 echo "  ssh -o ProxyCommand=\"cloudflared access ssh --hostname $HOSTNAME\" $USERNAME@$HOSTNAME"
 echo ""
-echo -e "  管理面板: ${SKYBLUE}cf-ssh-tunnel${NC}"
+echo -e "  管理面板: ${SKYBLUE}cfssh${NC}"
 echo ""
 echo -e "  ${YELLOW}注意：密码只显示一次，服务器不保存，请立即记录！${NC}"
 echo ""

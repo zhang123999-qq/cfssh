@@ -17,6 +17,7 @@ NC='\033[0m'
 
 [[ $EUID -ne 0 ]] && { echo -e "${RED}请用 root 运行${NC}"; exit 1; }
 
+# 依赖检查（卸载只需要 curl 和 python3，缺了就报错不自动装）
 command -v python3 &>/dev/null || { echo -e "${RED}需要 python3${NC}"; exit 1; }
 command -v curl &>/dev/null || { echo -e "${RED}需要 curl${NC}"; exit 1; }
 

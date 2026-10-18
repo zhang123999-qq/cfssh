@@ -41,10 +41,42 @@ cat << 'EOF'
 EOF
 echo -e "${NC}"
 
-# ---- 依赖检查 ----
-command -v python3 &>/dev/null || { log_error "需要 python3，请先安装"; exit 1; }
-command -v curl &>/dev/null || { log_error "需要 curl，请先安装"; exit 1; }
-command -v openssl &>/dev/null || { log_error "需要 openssl，请先安装"; exit 1; }
+# ---- 依赖检查与自动安装 ----
+install_pkg() {
+    local pkg="$1"
+    if command -v apt-get &>/dev/null; then
+        apt-get update -qq 2>/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" 2>/dev/null
+    elif command -v dnf &>/dev/null; then
+        dnf install -y -q "$pkg" 2>/dev/null
+    elif command -v yum &>/dev/null; then
+        yum install -y -q "$pkg" 2>/dev/null
+    elif command -v apk &>/dev/null; then
+        apk add --no-cache "$pkg" 2>/dev/null
+    elif command -v pacman &>/dev/null; then
+        pacman -Sy --noconfirm "$pkg" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+ensure_tool() {
+    local tool="$1" pkg="$2"
+    [[ -z "$pkg" ]] && pkg="$tool"
+    if ! command -v "$tool" &>/dev/null; then
+        log_info "未找到 $tool，正在自动安装..."
+        if install_pkg "$pkg"; then
+            command -v "$tool" &>/dev/null && { log_info "$tool 安装成功"; return 0; }
+        fi
+        log_error "无法自动安装 $tool，请手动安装后重试"
+        exit 1
+    fi
+}
+
+ensure_tool curl
+ensure_tool wget
+ensure_tool python3
+ensure_tool openssl
 
 # ---- 防止重复安装 ----
 if [[ -f /etc/cfssh/config ]]; then

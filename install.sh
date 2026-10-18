@@ -161,10 +161,36 @@ cat > /etc/ssh/sshd_config.d/99-cf-tunnel.conf << EOF
 # cfssh 生成
 Match User $USERNAME
     PasswordAuthentication yes
-    PubkeyAuthentication no
+    PubkeyAuthentication yes
 EOF
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
 log_info "用户 $USERNAME 已创建"
+
+# ---- 密码 24 小时后失效（systemd timer 一次性任务） ----
+log_info "设置密码 24 小时有效期..."
+cat > /etc/systemd/system/cfssh-expire.service << EOF
+[Unit]
+Description=Expire cfssh password after 24h
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/passwd -l $USERNAME
+ExecStartPost=/usr/bin/logger -t cfssh "Password expired for $USERNAME (24h)"
+EOF
+cat > /etc/systemd/system/cfssh-expire.timer << EOF
+[Unit]
+Description=Expire cfssh password 24h after install
+
+[Timer]
+OnActiveSec=24h
+Unit=cfssh-expire.service
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now cfssh-expire.timer 2>/dev/null
+log_info "密码将在 24 小时后自动失效"
 
 # ---- 创建隧道 ----
 echo ""
@@ -250,10 +276,11 @@ show_menu() {
     echo "  cfssh 管理面板"
     echo -e "${NC}"
     echo "  1. 查看连接信息"
-    echo "  2. 更换密码"
-    echo "  3. 重启隧道"
-    echo "  4. 查看隧道状态"
-    echo "  5. 查看隧道日志"
+    echo "  2. 更换密码（重置24小时有效期）"
+    echo "  3. 添加 SSH 公钥"
+    echo "  4. 重启隧道"
+    echo "  5. 查看隧道状态"
+    echo "  6. 查看隧道日志"
     echo "  0. 卸载"
     echo ""
 }
@@ -263,32 +290,58 @@ show_info() {
     echo -e "${GREEN}连接信息：${NC}"
     echo "  域名:     $HOSTNAME"
     echo "  用户名:   $USERNAME"
-    echo "  密码:     (安装时已打印，服务器不保存)"
+    echo "  密码:     (安装时已打印，服务器不保存，24小时后失效)"
     echo ""
     echo "  SSH 命令:"
     echo "  ssh -o ProxyCommand=\"cloudflared access ssh --hostname $HOSTNAME\" $USERNAME@$HOSTNAME"
+    echo ""
+    echo -e "  ${YELLOW}建议配置 SSH 密钥以免密码过期后无法登录${NC}"
     echo ""
 }
 
 rotate_pass() {
     [[ $EUID -ne 0 ]] && { echo "请用 root 运行"; return; }
     NEW_PASS=$(tr -dc 'A-Za-z0-9!@#$%^&*()_+-=' < /dev/urandom | head -c 20)
+    # 解锁（如果已过期）并设置新密码
+    passwd -u "$USERNAME" 2>/dev/null
     echo "$USERNAME:$NEW_PASS" | chpasswd
+    # 重置 24 小时计时器
+    systemctl restart cfssh-expire.timer 2>/dev/null
     echo ""
-    echo -e "${GREEN}密码已更换（只显示一次）：${NC}"
+    echo -e "${GREEN}密码已更换（只显示一次，24小时后失效）：${NC}"
     echo "  新密码: $NEW_PASS"
+    echo ""
+}
+
+add_pubkey() {
+    [[ $EUID -ne 0 ]] && { echo "请用 root 运行"; return; }
+    echo ""
+    echo "请粘贴 SSH 公钥（以 ssh- 开头的一整行），Ctrl+D 结束："
+    PUBKEY=$(cat)
+    if [[ "$PUBKEY" =~ ^ssh-(rsa|ed25519|ecdsa) ]]; then
+        USER_HOME=$(eval echo ~$USERNAME)
+        mkdir -p "$USER_HOME/.ssh"
+        echo "$PUBKEY" >> "$USER_HOME/.ssh/authorized_keys"
+        chmod 700 "$USER_HOME/.ssh"
+        chmod 600 "$USER_HOME/.ssh/authorized_keys"
+        chown -R "$USERNAME:$USERNAME" "$USER_HOME/.ssh"
+        echo -e "${GREEN}公钥已添加，密钥登录不受 24 小时限制${NC}"
+    else
+        echo -e "${RED}公钥格式不正确${NC}"
+    fi
     echo ""
 }
 
 while true; do
     show_menu
-    read -p "请选择 [0-5]: " choice
+    read -p "请选择 [0-6]: " choice
     case $choice in
         1) show_info ;;
         2) rotate_pass ;;
-        3) systemctl restart cfssh && echo "已重启" ;;
-        4) systemctl status cfssh --no-pager -l | head -20 ;;
-        5) journalctl -u cfssh -n 50 --no-pager ;;
+        3) add_pubkey ;;
+        4) systemctl restart cfssh && echo "已重启" ;;
+        5) systemctl status cfssh --no-pager -l | head -20 ;;
+        6) journalctl -u cfssh -n 50 --no-pager ;;
         0)
             read -p "确认卸载？(y/N): " c
             [[ "$c" == "y" || "$c" == "Y" ]] && {
@@ -323,5 +376,8 @@ echo "  ssh -o ProxyCommand=\"cloudflared access ssh --hostname $HOSTNAME\" $USE
 echo ""
 echo -e "  管理面板: ${SKYBLUE}cfssh${NC}"
 echo ""
-echo -e "  ${YELLOW}注意：密码只显示一次，服务器不保存，请立即记录！${NC}"
+echo -e "  ${YELLOW}注意：${NC}"
+echo -e "  - 密码只显示一次，服务器不保存，请立即记录！"
+echo -e "  - ${RED}密码 24 小时后自动失效${NC}，到期后用 cfssh -> 2 换新密码"
+echo -e "  - 建议用 cfssh -> 3 添加 SSH 公钥，密钥登录不受时间限制"
 echo ""

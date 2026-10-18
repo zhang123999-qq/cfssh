@@ -57,6 +57,10 @@ echo -e "${GREEN}[1/5]${NC} 停止隧道服务..."
 systemctl stop cfssh 2>/dev/null
 systemctl disable cfssh 2>/dev/null
 rm -f /etc/systemd/system/cfssh.service
+# 停止并删除密码过期计时器
+systemctl stop cfssh-expire.timer 2>/dev/null
+systemctl disable cfssh-expire.timer 2>/dev/null
+rm -f /etc/systemd/system/cfssh-expire.timer /etc/systemd/system/cfssh-expire.service
 systemctl daemon-reload
 
 # 删除管理命令

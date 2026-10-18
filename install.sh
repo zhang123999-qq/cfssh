@@ -3,10 +3,9 @@
 # cf-ssh-tunnel 一键安装脚本
 #
 # 用法:
-#   curl -sSL https://raw.githubusercontent.com/USER/cf-ssh-tunnel/main/install.sh | sudo bash -s -- \
+#   curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/install.sh | sudo bash -s -- \
 #     --cf-token "你的CF Token" \
 #     --domain "zhtest.cc.cd" \
-#     --notify-email "you@example.com"
 #
 # 重要：用户名、密码、域名只打印到控制台一次，密码永不落盘。
 #
@@ -20,14 +19,12 @@ source "$SCRIPT_DIR/lib/user-mgmt.sh"
 # 默认值
 CF_TOKEN=""
 BASE_DOMAIN=""
-NOTIFY_EMAIL=""
 
 # 解析参数
 while [[ $# -gt 0 ]]; do
     case $1 in
         --cf-token) CF_TOKEN="$2"; shift 2 ;;
         --domain) BASE_DOMAIN="$2"; shift 2 ;;
-        --notify-email) NOTIFY_EMAIL="$2"; shift 2 ;;
         *) log_error "未知参数: $1"; exit 1 ;;
     esac
 done
@@ -35,7 +32,6 @@ done
 # 检查必要参数
 [[ -z "$CF_TOKEN" ]] && { log_error "缺少 --cf-token"; exit 1; }
 [[ -z "$BASE_DOMAIN" ]] && { log_error "缺少 --domain"; exit 1; }
-[[ -z "$NOTIFY_EMAIL" ]] && { log_error "缺少 --notify-email"; exit 1; }
 
 check_root
 ARCH=$(get_arch)
@@ -96,14 +92,13 @@ systemctl restart cf-ssh-tunnel
 sleep 3
 systemctl is-active cf-ssh-tunnel > /dev/null && log_info "隧道服务运行中" || log_warn "隧道服务启动可能有问题，请检查"
 
-# ============ 6. 安装密码轮换 ============
-log_info "配置每日密码轮换..."
+# ============ 6. 安装手动密码轮换工具 ============
+log_info "安装密码轮换工具..."
 mkdir -p /etc/cf-ssh-tunnel
 cat > /etc/cf-ssh-tunnel/config << EOF
 # cf-ssh-tunnel 配置（不含密码！）
 USERNAME="$USERNAME"
 HOSTNAME="$HOSTNAME"
-NOTIFY_EMAIL="$NOTIFY_EMAIL"
 TUNNEL_ID="$TUNNEL_ID"
 TUNNEL_NAME="$TUNNEL_NAME"
 EOF
@@ -111,10 +106,7 @@ chmod 600 /etc/cf-ssh-tunnel/config
 
 cp "$SCRIPT_DIR/cron/rotate-password.sh" /usr/local/bin/cf-ssh-rotate.sh
 chmod +x /usr/local/bin/cf-ssh-rotate.sh
-
-# 添加 cron（每天 00:00）
-(crontab -l 2>/dev/null | grep -v "cf-ssh-rotate"; echo "0 0 * * * /usr/local/bin/cf-ssh-rotate.sh") | crontab -
-log_info "密码轮换 cron 已添加（每天 00:00）"
+log_info "密码轮换工具已安装：sudo cf-ssh-rotate.sh（手动执行，新密码打印到控制台）"
 
 # ============ 7. 输出凭证（仅此一次！） ============
 echo ""
@@ -136,8 +128,8 @@ echo "      User $USERNAME"
 echo "      ProxyCommand cloudflared access ssh --hostname %h"
 echo ""
 echo "  注意："
-echo "  - 密码每天 00:00 自动更换，新密码发到 $NOTIFY_EMAIL"
 echo "  - 密码不会保存在服务器上，请妥善保管本次输出"
+echo "  - 想换密码时跑：sudo cf-ssh-rotate.sh（新密码打印到控制台）"
 echo "  - 客户端需要安装 cloudflared"
 echo ""
 echo "=============================================="

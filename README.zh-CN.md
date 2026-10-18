@@ -6,8 +6,7 @@
 
 - **内网穿透**：服务器无需公网 IP，只需能访问互联网
 - **全随机凭证**：用户名、密码、域名前缀全部随机生成
-- **密码每日轮换**：每 24 小时自动更换密码，邮件通知
-- **密码不落盘**：密码只在安装时打印一次，服务器上不保存
+- **密码不落盘**：密码只在控制台打印一次，服务器上不保存
 - **一键安装/卸载**
 
 ## 快速开始
@@ -17,16 +16,15 @@
 ```bash
 curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/install.sh | sudo bash -s -- \
   --cf-token "你的Cloudflare API Token" \
-  --domain "example.com" \
-  --notify-email "you@example.com"
+  --domain "example.com"
 ```
 
 需要准备：
 1. **Cloudflare API Token**：在 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) 创建，需要权限：
-   - `Tunnel:Edit`
-   - `DNS:Edit`
-2. **域名**：已托管在 Cloudflare 的域名
-3. **邮箱**：接收每日新密码
+   - `Account` → `Cloudflare Tunnel` → `Edit`
+   - `Zone` → `Zone` → `Read`
+   - `Zone` → `DNS` → `Edit`
+2. **域名**：已托管在该 Cloudflare 账号下的域名
 
 安装完成后，终端会打印（**只显示一次**）：
 ```
@@ -42,10 +40,10 @@ curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/in
    # Ubuntu/Debian
    curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
    chmod +x /usr/local/bin/cloudflared
-   
+
    # macOS
    brew install cloudflared
-   
+
    # Termux (Android)
    pkg install cloudflared
    ```
@@ -61,14 +59,15 @@ curl -sSL https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/in
 3. 连接：
    ```bash
    ssh myserver
-   # 输入邮件里的当天密码
+   # 输入安装时打印的密码
    ```
 
-## 密码轮换
+## 更换密码
 
-- 每天 00:00（服务器时间）自动更换密码
-- 新密码发送到安装时指定的邮箱
-- 旧密码立即失效
+```bash
+sudo cf-ssh-rotate.sh
+# 新密码直接打印到控制台，只显示一次
+```
 
 ## 卸载
 

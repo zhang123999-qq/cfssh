@@ -48,9 +48,8 @@ systemctl disable cf-ssh-tunnel 2>/dev/null
 rm -f /etc/systemd/system/cf-ssh-tunnel.service
 systemctl daemon-reload
 
-# 2. 删除 cron
-log_info "删除密码轮换 cron..."
-crontab -l 2>/dev/null | grep -v "cf-ssh-rotate" | crontab -
+# 2. 删除轮换工具
+log_info "删除密码轮换工具..."
 rm -f /usr/local/bin/cf-ssh-rotate.sh
 
 # 3. 删除用户

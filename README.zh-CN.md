@@ -17,13 +17,23 @@
 - **3X-UI 式管理**：一条命令安装，`cfssh` 进管理面板
 - **自动清理**：卸载时自动删除隧道、DNS 记录、系统用户
 
+## 免费账号限制
+
+Cloudflare 免费账号每个账户可创建 **1000 个隧道**，每个隧道最多 25 个副本，带宽不限量。也就是说一台机器装一个，一个免费 CF 账号最多管 1000 台机器，完全够用。
+
 ## 安装
 
 ```bash
+# 交互模式（按提示输入）
 bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh)
+
+# 非交互模式（用自己的 token，一条命令搞定）
+bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh) \
+  --token "你的Cloudflare API Token" \
+  --domain "yanhuang.cc.cd"
 ```
 
-按提示输入：
+交互模式按提示输入：
 
 1. **Cloudflare API Token**：在 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) 创建 Custom Token，需要以下权限：
 
@@ -175,6 +185,12 @@ A: 一台机器只能装一个，重复安装会被拒绝。需要多个请先�
 
 **Q: 隧道掉了怎么办？**
 A: systemd 会自动重启（`Restart=always`）。`cfssh` → 选 4/5 看状态和日志。
+
+**Q: 非交互安装怎么做？**
+A: `bash <(curl -Ls URL) --token "你的Token" --domain "你的域名"`，适合批量部署多台机器。
+
+**Q: 免费账号能建多少个？**
+A: 1000 个隧道/账号，每个隧道 25 副本，带宽不限。
 
 ## License
 

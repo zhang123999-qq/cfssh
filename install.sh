@@ -4,6 +4,8 @@
 #
 # 安装:
 #   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh)
+#   # 或非交互（用自己的 token）:
+#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cfssh/main/install.sh) --token "你的Token" --domain "yanhuang.cc.cd"
 #
 # 安装后管理:
 #   cfssh
@@ -85,13 +87,30 @@ if [[ -f /etc/cfssh/config ]]; then
     exit 1
 fi
 
-# ---- 交互式输入 ----
+# ---- 参数解析（支持 --token / --domain，非交互模式） ----
+# 用法1（交互）: bash <(curl -Ls URL)
+# 用法2（参数）: bash <(curl -Ls URL) --token "xxx" --domain "example.com"
+CF_TOKEN=""
+BASE_DOMAIN=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --token) CF_TOKEN="$2"; shift 2 ;;
+        --domain) BASE_DOMAIN="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+# ---- 交互式输入（参数没给才问） ----
 echo ""
-read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
-echo ""
+if [[ -z "$CF_TOKEN" ]]; then
+    read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
+    echo ""
+fi
 [[ -z "$CF_TOKEN" ]] && { log_error "Token 不能为空"; exit 1; }
 
-read -p "请输入域名 (如 yanhuang.cc.cd): " BASE_DOMAIN
+if [[ -z "$BASE_DOMAIN" ]]; then
+    read -p "请输入域名 (如 yanhuang.cc.cd): " BASE_DOMAIN
+fi
 [[ -z "$BASE_DOMAIN" ]] && { log_error "域名不能为空"; exit 1; }
 
 # 严格校验域名格式（防命令注入）

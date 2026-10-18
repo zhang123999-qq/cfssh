@@ -354,14 +354,20 @@ CONFIG="/etc/cfssh/config"
 
 show_menu() {
     echo -e "${SKYBLUE}"
-    echo "  cfssh 管理面板"
+    echo "  ┌─ cfssh 管理面板 ─────────────"
     echo -e "${NC}"
-    echo "  1. 查看连接信息"
-    echo "  2. 更换密码（重置24小时有效期）"
-    echo "  3. 添加 SSH 公钥"
-    echo "  4. 重启隧道"
-    echo "  5. 查看隧道状态"
-    echo "  6. 查看隧道日志"
+    echo "  │ 连接管理"
+    echo "  │  1. 查看连接信息"
+    echo "  │  2. 更换密码（重置24小时有效期）"
+    echo "  │  3. 添加 SSH 公钥"
+    echo "  │"
+    echo "  │ 隧道管理"
+    echo "  │  4. 重启隧道"
+    echo "  │  5. 查看隧道状态"
+    echo "  │  6. 查看隧道日志"
+    echo "  │  7. 更新隧道 Token"
+    echo "  │"
+    echo -e "  ${SKYBLUE}└─────────────────────────────${NC}"
     echo "  0. 卸载"
     echo ""
 }
@@ -413,9 +419,65 @@ add_pubkey() {
     echo ""
 }
 
+update_tunnel_token() {
+    [[ $EUID -ne 0 ]] && { echo "请用 root 运行"; return; }
+    echo ""
+    echo -e "${YELLOW}用于隧道 Token 丢失、泄露或被轮换后重新获取${NC}"
+    read -s -p "请输入 Cloudflare API Token: " CF_TOKEN
+    echo ""
+    [[ -z "$CF_TOKEN" ]] && { echo -e "${RED}Token 不能为空${NC}"; return; }
+
+    echo "正在获取新的隧道 Token..."
+    # 获取 account_id
+    ACCOUNT_ID=$(curl -s --connect-timeout 10 --max-time 30 "https://api.cloudflare.com/client/v4/accounts" \
+        -H "Authorization: Bearer $CF_TOKEN" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
+" 2>/dev/null || echo "")
+    [[ -z "$ACCOUNT_ID" ]] && { echo -e "${RED}Token 无效${NC}"; return; }
+
+    # 获取新的隧道 Token
+    NEW_TOKEN=$(curl -s --connect-timeout 10 --max-time 30 \
+        "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" \
+        -H "Authorization: Bearer $CF_TOKEN" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d['result'] if d.get('success') else '')
+" 2>/dev/null || echo "")
+    [[ -z "$NEW_TOKEN" ]] && { echo -e "${RED}获取失败，请检查 Token 权限${NC}"; return; }
+
+    # 更新 systemd 服务文件
+    cat > /etc/systemd/system/cfssh.service << EOF
+[Unit]
+Description=Cloudflare Tunnel for SSH
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token $NEW_TOKEN
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 600 /etc/systemd/system/cfssh.service
+    systemctl daemon-reload
+    systemctl restart cfssh
+    sleep 2
+    if systemctl is-active cfssh &>/dev/null; then
+        echo -e "${GREEN}隧道 Token 已更新，服务运行正常${NC}"
+    else
+        echo -e "${RED}服务启动失败，请检查日志（选项 6）${NC}"
+    fi
+    echo ""
+}
+
 while true; do
     show_menu
-    read -p "请选择 [0-6]: " choice
+    read -p "请选择 [0-7]: " choice
     case $choice in
         1) show_info ;;
         2) rotate_pass ;;
@@ -423,6 +485,7 @@ while true; do
         4) systemctl restart cfssh && echo "已重启" ;;
         5) systemctl status cfssh --no-pager -l | head -20 ;;
         6) journalctl -u cfssh -n 50 --no-pager ;;
+        7) update_tunnel_token ;;
         0)
             read -p "确认卸载？(y/N): " c
             [[ "$c" == "y" || "$c" == "Y" ]] && {

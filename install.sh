@@ -42,10 +42,11 @@ EOF
 echo -e "${NC}"
 
 # ---- 依赖检查与自动安装 ----
+_APT_UPDATED=0
 install_pkg() {
     local pkg="$1"
     if command -v apt-get &>/dev/null; then
-        apt-get update -qq 2>/dev/null
+        [[ $_APT_UPDATED -eq 0 ]] && { apt-get update -qq 2>/dev/null; _APT_UPDATED=1; }
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" 2>/dev/null
     elif command -v dnf &>/dev/null; then
         dnf install -y -q "$pkg" 2>/dev/null
@@ -122,13 +123,14 @@ CF_API="https://api.cloudflare.com/client/v4"
 # ---- API 辅助函数 ----
 cf_api() {  # $1=method $2=path $3=data
     local method="$1" path="$2" data="$3"
+    local CURL_OPTS="-s --connect-timeout 10 --max-time 30"
     if [[ -n "$data" ]]; then
-        curl -s -X "$method" "$CF_API$path" \
+        curl $CURL_OPTS -X "$method" "$CF_API$path" \
             -H "Authorization: Bearer $CF_TOKEN" \
             -H "Content-Type: application/json" \
             --data "$data"
     else
-        curl -s -X "$method" "$CF_API$path" \
+        curl $CURL_OPTS -X "$method" "$CF_API$path" \
             -H "Authorization: Bearer $CF_TOKEN"
     fi
 }
@@ -141,7 +143,7 @@ ACCOUNT_ID=$(cf_api GET "/accounts" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(d['result'][0]['id'] if d.get('success') and d.get('result') else 'ERROR')
-" 2>/dev/null)
+" 2>/dev/null || echo "ERROR")
 [[ "$ACCOUNT_ID" == "ERROR" || -z "$ACCOUNT_ID" ]] && { log_error "Token 无效或无账户权限"; exit 1; }
 log_info "账户验证通过"
 
@@ -153,7 +155,7 @@ while [[ -n "$check_domain" ]]; do
 import json,sys
 d=json.load(sys.stdin)
 print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
-" 2>/dev/null)
+" 2>/dev/null || echo "ERROR")
     if [[ -n "$ZONE_ID" ]]; then
         ZONE_NAME="$check_domain"
         break
@@ -175,7 +177,13 @@ log_info "域名 Zone: $ZONE_NAME"
 echo ""
 log_info "安装 cloudflared..."
 if ! command -v cloudflared &>/dev/null; then
-    curl -sSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH" -o /usr/local/bin/cloudflared
+    curl -sSL --connect-timeout 10 --max-time 120 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH" -o /usr/local/bin/cloudflared
+    # 验证下载成功（文件存在且大于 1MB）
+    if [[ ! -s /usr/local/bin/cloudflared ]] || [[ $(stat -c%s /usr/local/bin/cloudflared 2>/dev/null || stat -f%z /usr/local/bin/cloudflared 2>/dev/null || echo 0) -lt 1048576 ]]; then
+        log_error "cloudflared 下载失败，请检查网络后重试"
+        rm -f /usr/local/bin/cloudflared
+        exit 1
+    fi
     chmod +x /usr/local/bin/cloudflared
 fi
 log_info "cloudflared 就绪"
@@ -188,6 +196,21 @@ if ! id "$USERNAME" &>/dev/null; then
 fi
 echo "$USERNAME:$PASSWORD" | chpasswd
 
+# 检查 sshd 是否支持 Include（老系统可能不支持）
+if ! grep -q "^Include /etc/ssh/sshd_config.d" /etc/ssh/sshd_config 2>/dev/null; then
+    SSHD_MODE="main"
+    log_warn "sshd 不支持 sshd_config.d，将直接写入主配置"
+    # 备份并追加到主配置
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak-cfssh 2>/dev/null
+    cat >> /etc/ssh/sshd_config << SSHEOF
+
+# cfssh 生成
+Match User $USERNAME
+    PasswordAuthentication yes
+    PubkeyAuthentication yes
+SSHEOF
+else
+SSHD_MODE="includedir"
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/99-cf-tunnel.conf << EOF
 # cfssh 生成
@@ -195,6 +218,7 @@ Match User $USERNAME
     PasswordAuthentication yes
     PubkeyAuthentication yes
 EOF
+fi
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
 log_info "用户 $USERNAME 已创建"
 
@@ -232,14 +256,19 @@ TUNNEL_ID=$(cf_api POST "/accounts/$ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$TUNNEL_
 import json,sys
 d=json.load(sys.stdin)
 print(d['result']['id'] if d.get('success') else 'ERROR:'+str(d.get('errors')))
-" 2>/dev/null)
+" 2>/dev/null || echo "ERROR")
 [[ "$TUNNEL_ID" == ERROR* ]] && { log_error "创建隧道失败: $TUNNEL_ID"; exit 1; }
 log_info "隧道已创建: $TUNNEL_NAME"
 
 # 配置 ingress
-cf_api PUT "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
-    "{\"config\":{\"ingress\":[{\"hostname\":\"$HOSTNAME\",\"service\":\"ssh://localhost:22\"},{\"service\":\"http_status:404\"}]}}" > /dev/null
-log_info "隧道路由已配置"
+INGRESS_RESP=$(cf_api PUT "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/configurations" \
+    "{\"config\":{\"ingress\":[{\"hostname\":\"$HOSTNAME\",\"service\":\"ssh://localhost:22\"},{\"service\":\"http_status:404\"}]}}")
+if echo "$INGRESS_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)" 2>/dev/null; then
+    log_info "隧道路由已配置"
+else
+    log_error "隧道路由配置失败: $INGRESS_RESP"
+    exit 1
+fi
 
 # 创建 DNS
 DNS_RESP=$(cf_api POST "/zones/$ZONE_ID/dns_records" \
@@ -248,7 +277,7 @@ DNS_RECORD_ID=$(echo "$DNS_RESP" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 print(d['result']['id'] if d.get('success') else '')
-" 2>/dev/null)
+" 2>/dev/null || echo "ERROR")
 [[ -z "$DNS_RECORD_ID" ]] && log_warn "DNS 创建可能失败" || log_info "DNS 记录已创建"
 
 # 获取隧道 Token
@@ -256,7 +285,7 @@ TUNNEL_TOKEN=$(cf_api GET "/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/token" | 
 import json,sys
 d=json.load(sys.stdin)
 print(d['result'] if d.get('success') else 'ERROR')
-" 2>/dev/null)
+" 2>/dev/null || echo "ERROR")
 [[ "$TUNNEL_TOKEN" == "ERROR" || -z "$TUNNEL_TOKEN" ]] && { log_error "获取隧道 Token 失败"; exit 1; }
 
 # ---- systemd 服务 ----
@@ -292,6 +321,7 @@ TUNNEL_ID="$TUNNEL_ID"
 TUNNEL_NAME="$TUNNEL_NAME"
 ZONE_ID="$ZONE_ID"
 DNS_RECORD_ID="$DNS_RECORD_ID"
+SSHD_MODE="$SSHD_MODE"
 EOF
 chmod 600 /etc/cfssh/config
 
@@ -351,7 +381,7 @@ add_pubkey() {
     echo "请粘贴 SSH 公钥（以 ssh- 开头的一整行），Ctrl+D 结束："
     PUBKEY=$(cat)
     if [[ "$PUBKEY" =~ ^ssh-(rsa|ed25519|ecdsa) ]]; then
-        USER_HOME=$(eval echo ~$USERNAME)
+        USER_HOME=$(getent passwd "$USERNAME" | cut -d: -f6)
         mkdir -p "$USER_HOME/.ssh"
         echo "$PUBKEY" >> "$USER_HOME/.ssh/authorized_keys"
         chmod 700 "$USER_HOME/.ssh"

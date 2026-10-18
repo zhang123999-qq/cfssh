@@ -71,7 +71,27 @@ rm -f /usr/local/bin/cfssh
 # 删除用户
 echo -e "${GREEN}[3/5]${NC} 删除用户 $USERNAME..."
 userdel -r "$USERNAME" 2>/dev/null
-rm -f /etc/ssh/sshd_config.d/99-cf-tunnel.conf
+# 清理 sshd 配置（根据安装时的方式）
+if [[ "$SSHD_MODE" == "main" ]]; then
+    # 从主配置中删除 cfssh 添加的块
+    python3 -c "
+lines = open('/etc/ssh/sshd_config').read().split('\n')
+out = []
+skip = 0
+for line in lines:
+    if '# cfssh 生成' in line:
+        skip = 4  # 跳过注释+Match+2行配置
+        continue
+    if skip > 0:
+        skip -= 1
+        continue
+    out.append(line)
+open('/etc/ssh/sshd_config','w').write('\n'.join(out))
+" 2>/dev/null
+    echo "  已从 sshd_config 移除 cfssh 配置"
+else
+    rm -f /etc/ssh/sshd_config.d/99-cf-tunnel.conf
+fi
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
 
 # 删除 CF 隧道和 DNS
@@ -80,7 +100,7 @@ ACCOUNT_ID=$(curl -s "$CF_API/accounts" -H "Authorization: Bearer $CF_TOKEN" | p
 import json,sys
 d=json.load(sys.stdin)
 print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
-" 2>/dev/null)
+" 2>/dev/null || echo "")
 if [[ -n "$ACCOUNT_ID" ]]; then
     curl -s -X DELETE "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID?cascade=true" \
         -H "Authorization: Bearer $CF_TOKEN" > /dev/null

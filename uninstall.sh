@@ -1,68 +1,89 @@
 #!/bin/bash
 #
-# cf-ssh-tunnel 卸载脚本
+# cf-ssh-tunnel 卸载
 #
-# 用法:
-#   sudo bash uninstall.sh --cf-token "你的CF Token"
+# 可单独运行:
+#   bash <(curl -Ls https://raw.githubusercontent.com/zhang123999-qq/cf-ssh-tunnel/main/uninstall.sh) --cf-token "你的Token"
 #
-# 会删除：系统用户、systemd 服务、cron、隧道、DNS 记录、配置文件
-# 注意：此操作不可逆！
+# 或通过管理面板: cf-ssh-tunnel -> 0
 #
+
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/common.sh"
-source "$SCRIPT_DIR/lib/cf-api.sh"
-source "$SCRIPT_DIR/lib/user-mgmt.sh"
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+[[ $EUID -ne 0 ]] && { echo -e "${RED}请用 root 运行${NC}"; exit 1; }
 
 CF_TOKEN=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --cf-token) CF_TOKEN="$2"; shift 2 ;;
-        *) log_error "未知参数: $1"; exit 1 ;;
+        *) shift ;;
     esac
 done
 
-[[ -z "$CF_TOKEN" ]] && { log_error "缺少 --cf-token"; exit 1; }
-check_root
+if [[ -z "$CF_TOKEN" ]]; then
+    read -p "请输入 Cloudflare API Token: " CF_TOKEN
+    [[ -z "$CF_TOKEN" ]] && { echo -e "${RED}Token 不能为空${NC}"; exit 1; }
+fi
 
 CONFIG="/etc/cf-ssh-tunnel/config"
 if [[ ! -f "$CONFIG" ]]; then
-    log_error "未找到配置文件，可能未安装"
+    echo -e "${YELLOW}未找到安装记录，可能未安装${NC}"
     exit 1
 fi
 source "$CONFIG"
 
-echo "即将删除以下内容："
+echo ""
+echo -e "${YELLOW}即将删除：${NC}"
 echo "  用户: $USERNAME"
 echo "  域名: $HOSTNAME"
-echo "  隧道: $TUNNEL_NAME ($TUNNEL_ID)"
+echo "  隧道: $TUNNEL_NAME"
 echo ""
 read -p "确认卸载？(y/N): " confirm
 [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "已取消"; exit 0; }
 
-# 1. 停止服务
-log_info "停止隧道服务..."
+CF_API="https://api.cloudflare.com/client/v4"
+
+# 停止服务
+echo -e "${GREEN}[1/5]${NC} 停止隧道服务..."
 systemctl stop cf-ssh-tunnel 2>/dev/null
 systemctl disable cf-ssh-tunnel 2>/dev/null
 rm -f /etc/systemd/system/cf-ssh-tunnel.service
 systemctl daemon-reload
 
-# 2. 删除轮换工具
-log_info "删除密码轮换工具..."
-rm -f /usr/local/bin/cf-ssh-rotate.sh
+# 删除管理命令
+echo -e "${GREEN}[2/5]${NC} 删除管理命令..."
+rm -f /usr/local/bin/cf-ssh-tunnel
 
-# 3. 删除用户
-log_info "删除用户 $USERNAME..."
-delete_ssh_user "$USERNAME"
+# 删除用户
+echo -e "${GREEN}[3/5]${NC} 删除用户 $USERNAME..."
+userdel -r "$USERNAME" 2>/dev/null
+rm -f /etc/ssh/sshd_config.d/99-cf-tunnel.conf
+systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
 
-# 4. 删除 Cloudflare 隧道和 DNS
-log_info "删除 Cloudflare 隧道..."
-ACCOUNT_ID=$(cf_get_account_id "$CF_TOKEN")
-cf_delete_tunnel "$CF_TOKEN" "$ACCOUNT_ID" "$TUNNEL_ID"
-log_warn "请手动删除 DNS 记录: $HOSTNAME"
+# 删除 CF 隧道
+echo -e "${GREEN}[4/5]${NC} 删除 Cloudflare 隧道..."
+ACCOUNT_ID=$(curl -s "$CF_API/accounts" -H "Authorization: Bearer $CF_TOKEN" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d['result'][0]['id'] if d.get('success') and d.get('result') else '')
+" 2>/dev/null)
+if [[ -n "$ACCOUNT_ID" ]]; then
+    curl -s -X DELETE "$CF_API/accounts/$ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID?cascade=true" \
+        -H "Authorization: Bearer $CF_TOKEN" > /dev/null
+    echo "  隧道已删除"
+else
+    echo -e "  ${YELLOW}Token 无效，跳过隧道删除（请手动在 CF 后台删）${NC}"
+fi
 
-# 5. 清理配置
+# 清理配置
+echo -e "${GREEN}[5/5]${NC} 清理配置文件..."
 rm -rf /etc/cf-ssh-tunnel
 
-log_info "卸载完成"
+echo ""
+echo -e "${YELLOW}请手动删除 DNS 记录: $HOSTNAME${NC}"
+echo -e "${GREEN}卸载完成${NC}"
